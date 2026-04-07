@@ -5,24 +5,57 @@ output_file="lookup_results.txt"
 
 > "$output_file"
 
-while IFS= read -r host; do
+is_ip() {
+    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+while IFS= read -r raw; do
+    # Clean input
+    host=$(echo "$raw" | tr -d '\r' | xargs)
+
     [[ -z "$host" || "$host" =~ ^# ]] && continue
 
-    # Get IP from ping (first resolved address)
-    ip=$(ping -c1 "$host" 2>/dev/null | awk -F'[()]' '/PING/{print $2}')
+    if is_ip "$host"; then
+        # Reverse lookup IP → PTR
+        ptr=$(dig -x "$host" +short | sed 's/\.$//')
 
-    if [[ -z "$ip" ]]; then
-        echo "$host NO_IP" >> "$output_file"
-        continue
-    fi
+        if [[ -z "$ptr" ]]; then
+            line="$host NO_PTR NO_IP"
+            echo "$line" | tee -a "$output_file"
+            continue
+        fi
 
-    # Reverse DNS lookup
-    ptr=$(dig -x "$ip" +short)
+        # Forward lookup PTR → IP
+        ip2=$(dig +short "$ptr" | head -n1)
 
-    if [[ -z "$ptr" ]]; then
-        echo "$host $ip NO_PTR" >> "$output_file"
+        if [[ -z "$ip2" ]]; then
+            line="$host $ptr NO_IP"
+        else
+            line="$host $ptr $ip2"
+        fi
+
+        echo "$line" | tee -a "$output_file"
+
     else
-        echo "$host $ip ${ptr%.}" >> "$output_file"
+        # Forward lookup FQDN → IP
+        ip=$(dig +short "$host" | head -n1)
+
+        if [[ -z "$ip" ]]; then
+            line="$host NO_IP"
+            echo "$line" | tee -a "$output_file"
+            continue
+        fi
+
+        # Reverse lookup IP → PTR
+        ptr=$(dig -x "$ip" +short | sed 's/\.$//')
+
+        if [[ -z "$ptr" ]]; then
+            line="$host $ip NO_PTR"
+        else
+            line="$host $ip $ptr"
+        fi
+
+        echo "$line" | tee -a "$output_file"
     fi
 
 done < "$input_file"
